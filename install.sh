@@ -122,6 +122,25 @@ if ! command -v databricks >/dev/null 2>&1; then
   fi
 fi
 
+# Bundle deploy uses Terraform internally. Older CLI versions fail to fetch the
+# official binary because HashiCorp's signing key expired (April 2026). Use a
+# local terraform if available (brew install terraform), else warn.
+if [ -z "${DATABRICKS_TF_EXEC_PATH:-}" ]; then
+  if command -v terraform >/dev/null 2>&1; then
+    export DATABRICKS_TF_EXEC_PATH="$(command -v terraform)"
+    log "Using local terraform at $DATABRICKS_TF_EXEC_PATH (bypasses HashiCorp sig-key expiry)"
+  elif command -v brew >/dev/null 2>&1; then
+    log "Installing terraform via brew (needed by DABs; works around HashiCorp sig-key expiry)"
+    brew install terraform >/dev/null 2>&1 || warn "brew install terraform failed; continuing"
+    if command -v terraform >/dev/null 2>&1; then
+      export DATABRICKS_TF_EXEC_PATH="$(command -v terraform)"
+    fi
+  else
+    warn "terraform not found. If deploy fails with 'openpgp: key expired',"
+    warn "  install terraform (brew install terraform) and re-run, OR upgrade the CLI (brew upgrade databricks)"
+  fi
+fi
+
 # ----- Collect missing values interactively ----------------------------------
 prompt_if_empty() {
   local varname="$1" label="$2" default="${3:-}"
