@@ -43,7 +43,11 @@ RUN_ETL="${RUN_ETL:-true}"
 NO_PROMPT="${NO_PROMPT:-}"
 
 # ----- CLI flag parsing ------------------------------------------------------
-for arg in "$@"; do
+for raw_arg in "$@"; do
+  # Strip leading/trailing whitespace (handles paste artefacts from '\ ' line
+  # continuations getting flattened into a single line in some terminals).
+  arg="$(printf '%s' "$raw_arg" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  [ -z "$arg" ] && continue
   case "$arg" in
     --workspace-host=*)    WORKSPACE_HOST="${arg#*=}" ;;
     --profile=*)           PROFILE="${arg#*=}" ;;
@@ -138,6 +142,18 @@ prompt_if_empty WORKSPACE_HOST "Workspace host (https://...)"
 prompt_if_empty PROFILE        "Databricks CLI profile name"
 prompt_if_empty CATALOG        "Unity Catalog catalog (must exist)"
 prompt_if_empty EMAILS         "Alert recipient emails (comma-separated)"
+
+# Normalise the workspace host to scheme://authority — strip any /path or ?query
+# (users often copy the URL from their address bar which includes /browse?o=...)
+if [[ "$WORKSPACE_HOST" =~ ^(https?://[^/?#]+) ]]; then
+  _CLEAN_HOST="${BASH_REMATCH[1]}"
+  if [ "$_CLEAN_HOST" != "$WORKSPACE_HOST" ]; then
+    warn "Trimming workspace-host to '$_CLEAN_HOST' (was '$WORKSPACE_HOST')"
+    WORKSPACE_HOST="$_CLEAN_HOST"
+  fi
+else
+  die "workspace-host must start with http(s)://"
+fi
 
 # ----- Ensure the profile exists and is valid --------------------------------
 if ! databricks auth profiles | awk 'NR>1{print $1}' | grep -qx "$PROFILE"; then
