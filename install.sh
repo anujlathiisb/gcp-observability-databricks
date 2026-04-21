@@ -120,24 +120,39 @@ if ! command -v databricks >/dev/null 2>&1; then
   else
     curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
   fi
+else
+  # Upgrade an existing CLI — newer versions ship the rotated HashiCorp PGP key
+  # that lets `databricks bundle deploy` fetch Terraform without the
+  # 'openpgp: key expired' error.
+  if command -v brew >/dev/null 2>&1; then
+    log "Upgrading Databricks CLI (brew) — safe if already latest"
+    brew upgrade databricks >/dev/null 2>&1 || true
+  fi
 fi
 
-# Bundle deploy uses Terraform internally. Older CLI versions fail to fetch the
-# official binary because HashiCorp's signing key expired (April 2026). Use a
-# local terraform if available (brew install terraform), else warn.
+# Sanity-check: clear any stale/invalid DATABRICKS_TF_EXEC_PATH inherited from
+# the shell (e.g. from `$(which terraform)` when terraform isn't installed,
+# which yields 'terraform not found' on some macOS builds).
+if [ -n "${DATABRICKS_TF_EXEC_PATH:-}" ] && [ ! -x "$DATABRICKS_TF_EXEC_PATH" ]; then
+  warn "Unsetting invalid DATABRICKS_TF_EXEC_PATH='$DATABRICKS_TF_EXEC_PATH'"
+  unset DATABRICKS_TF_EXEC_PATH
+fi
+
+# Prefer a local terraform binary if available — bypasses the HashiCorp
+# signing-key dance entirely. If the CLI upgrade above already works, this
+# is optional.
 if [ -z "${DATABRICKS_TF_EXEC_PATH:-}" ]; then
   if command -v terraform >/dev/null 2>&1; then
     export DATABRICKS_TF_EXEC_PATH="$(command -v terraform)"
-    log "Using local terraform at $DATABRICKS_TF_EXEC_PATH (bypasses HashiCorp sig-key expiry)"
+    log "Using local terraform at $DATABRICKS_TF_EXEC_PATH"
   elif command -v brew >/dev/null 2>&1; then
-    log "Installing terraform via brew (needed by DABs; works around HashiCorp sig-key expiry)"
-    brew install terraform >/dev/null 2>&1 || warn "brew install terraform failed; continuing"
+    # Homebrew removed `terraform` (HashiCorp switched to BSL). Use hashicorp's tap.
+    log "Installing terraform via hashicorp/tap (Homebrew no longer ships the 'terraform' formula directly)"
+    brew tap hashicorp/tap >/dev/null 2>&1 || true
+    brew install hashicorp/tap/terraform >/dev/null 2>&1 || warn "terraform install skipped; relying on CLI to fetch it"
     if command -v terraform >/dev/null 2>&1; then
       export DATABRICKS_TF_EXEC_PATH="$(command -v terraform)"
     fi
-  else
-    warn "terraform not found. If deploy fails with 'openpgp: key expired',"
-    warn "  install terraform (brew install terraform) and re-run, OR upgrade the CLI (brew upgrade databricks)"
   fi
 fi
 
