@@ -89,8 +89,9 @@ targets:
     workspace:
       host: https://8259559727960544.4.gcp.databricks.com
       root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
+    # Note: the `admins` group has implicit CAN_MANAGE on all workspace resources
+    # and Databricks rejects attempts to grant it explicitly. Keep `users: CAN_VIEW`
+    # so everyone can read the dashboard.
     permissions:
-      - group_name: "admins"
-        level: CAN_MANAGE
       - group_name: "users"
         level: CAN_VIEW
