@@ -1,0 +1,46 @@
+# =========================================================================
+# GCP Cost Observability — Example Configuration
+# =========================================================================
+# Copy this file to `config.yml` and fill in values for your workspace:
+#     cp config.example.yml config.yml
+#     $EDITOR config.yml
+# Then deploy with:
+#     ./scripts/deploy.py --target=prod --run-etl
+# =========================================================================
+
+# --- Workspace -----------------------------------------------------------
+workspace_host: "https://<your-workspace>.cloud.databricks.com"
+databricks_profile: "<cli-profile-name>"     # e.g. my-workspace (from `databricks auth login`)
+
+# --- Unity Catalog -------------------------------------------------------
+catalog: "<your_catalog>"                    # MUST already exist; bundle creates the schema inside it
+schema:  "observability"
+
+# --- Cloud + Region ------------------------------------------------------
+# cloud  : GCP / AWS / AZURE — filters system.billing.usage; also drives VM price source
+# region : cloud region for VM list-price lookups
+#          GCP   : us-central1, us-east1, europe-west1, asia-south1 (Mumbai), ...
+#          AWS   : us-east-1, ap-south-1, ...
+#          AZURE : eastus, centralindia, ...
+cloud:  "GCP"
+region: "us-central1"
+
+# --- Alert Config --------------------------------------------------------
+daily_threshold_dollars: 1000
+threshold_percentages:   "25,50,75,90,100"    # tiers where alerts fire (comma-separated %)
+alert_recipient_emails:                        # receive the email AND shown on the dashboard
+  - ops@example.com
+  - finance@example.com
+
+# --- Schedules (IST by default) ------------------------------------------
+schedule_timezone:   "Asia/Kolkata"
+etl_schedule_cron:   "0 0 6 * * ?"             # 6:00 AM IST daily — Quartz format
+alert_schedule_cron: "0 0 * * * ?"             # every hour on the hour (IST)
+
+# --- Optional: live GCP Cloud Billing Catalog API ------------------------
+# If you want `02_refresh_vm_prices.py` to pull live GCP list prices daily
+# (instead of the built-in region-aware static seed), create a Databricks
+# secret scope + secret containing a GCP API key, then reference them here.
+# Leave empty to use the static seed.
+gcp_billing_api_key_secret_scope: ""
+gcp_billing_api_key_secret_name:  ""

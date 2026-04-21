@@ -1,0 +1,9 @@
+resources:
+  dashboards:
+    cost_observability_dashboard:
+      display_name: "[${bundle.target}] GCP Cost Observability"
+      file_path: ../src/cost_observability_dashboard.lvdash.json
+      warehouse_id: ${var.warehouse_id}
+      permissions:
+        - group_name: "users"
+          level: CAN_READ

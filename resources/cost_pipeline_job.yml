@@ -1,0 +1,77 @@
+resources:
+  jobs:
+    cost_pipeline:
+      name: "[${bundle.target}] GCP Cost Observability - Daily ETL"
+      description: "Daily pipeline: billing usage + list prices -> gold cost tables + daily VM price refresh"
+      schedule:
+        quartz_cron_expression: ${var.etl_schedule_cron}
+        timezone_id: ${var.schedule_timezone}
+      tags:
+        project: "gcp-cost-observability"
+        pipeline: "daily-etl"
+
+      tasks:
+        - task_key: setup_schema
+          description: "Create schema and tables if not exists"
+          notebook_task:
+            notebook_path: ../src/01_setup_schema.py
+            source: WORKSPACE
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              daily_threshold_dollars: ${var.daily_threshold_dollars}
+              alert_recipient_emails: ${var.alert_recipient_emails}
+              threshold_percentages: ${var.threshold_percentages}
+          environment_key: default_env
+
+        - task_key: refresh_vm_prices
+          description: "Refresh GCP VM reference prices daily (live API or region-aware seed)"
+          depends_on:
+            - task_key: setup_schema
+          notebook_task:
+            notebook_path: ../src/02_refresh_vm_prices.py
+            source: WORKSPACE
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              cloud: ${var.cloud}
+              region: ${var.region}
+              gcp_billing_api_key_secret_scope: ${var.gcp_billing_api_key_secret_scope}
+              gcp_billing_api_key_secret_name: ${var.gcp_billing_api_key_secret_name}
+          environment_key: default_env
+
+        - task_key: daily_cost_etl
+          description: "Transform billing.usage + list_prices into gold tables"
+          depends_on:
+            - task_key: setup_schema
+          notebook_task:
+            notebook_path: ../src/03_daily_cost_etl.py
+            source: WORKSPACE
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              cloud: ${var.cloud}
+          environment_key: default_env
+
+        - task_key: vm_cost_estimation
+          description: "Join cluster data with VM prices for cost estimation"
+          depends_on:
+            - task_key: daily_cost_etl
+            - task_key: refresh_vm_prices
+          notebook_task:
+            notebook_path: ../src/04_vm_cost_estimation.py
+            source: WORKSPACE
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              cloud: ${var.cloud}
+              region: ${var.region}
+          environment_key: default_env
+
+      environments:
+        - environment_key: default_env
+          spec:
+            client: "2"
+            dependencies:
+              - databricks-sdk>=0.40.0
+              - requests>=2.31.0

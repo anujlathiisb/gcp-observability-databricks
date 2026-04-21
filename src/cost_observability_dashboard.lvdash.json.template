@@ -1,0 +1,2538 @@
+{
+  "datasets": [
+    {
+      "name": "ds_month_picker",
+      "displayName": "Available Months",
+      "query": "SELECT DISTINCT\n  date_format(usage_date, 'MMM yyyy') AS month_label,\n  date_trunc('MONTH', usage_date) AS month_start\nFROM {{CATALOG_SCHEMA}}.daily_cost_summary\nWHERE usage_date >= date_sub(current_date(), 365)\nORDER BY month_start DESC"
+    },
+    {
+      "name": "ds_cost_counters",
+      "displayName": "Selected-Month Cost Counters",
+      "query": "WITH m AS (\n  SELECT COALESCE(try_to_date(:selected_month, 'MMM yyyy'), date_trunc('MONTH', current_date())) AS mstart\n),\nbounds AS (\n  SELECT mstart, add_months(mstart, 1) AS mend, add_months(mstart, -1) AS prev_mstart FROM m\n),\ncur AS (\n  SELECT dcs.usage_date, dcs.total_cost_usd\n  FROM {{CATALOG_SCHEMA}}.daily_cost_summary dcs, bounds b\n  WHERE dcs.usage_date >= b.mstart AND dcs.usage_date < b.mend\n),\nprev AS (\n  SELECT SUM(total_cost_usd) AS prev_total\n  FROM {{CATALOG_SCHEMA}}.daily_cost_summary dcs, bounds b\n  WHERE dcs.usage_date >= b.prev_mstart AND dcs.usage_date < b.mstart\n),\nagg AS (\n  SELECT SUM(daily_cost) AS month_total,\n         COUNT(DISTINCT usage_date) AS days_with_usage,\n         MAX(daily_cost) AS peak_day_cost\n  FROM (\n    SELECT usage_date, SUM(total_cost_usd) AS daily_cost FROM cur GROUP BY usage_date\n  )\n)\nSELECT\n  ROUND(agg.month_total, 2) AS month_total,\n  ROUND(agg.month_total / NULLIF(agg.days_with_usage, 0), 2) AS avg_daily,\n  ROUND(agg.peak_day_cost, 2) AS peak_day,\n  ROUND((agg.month_total - prev.prev_total) / NULLIF(prev.prev_total, 0) * 100, 1) AS pct_vs_prev_month\nFROM agg, prev",
+      "parameters": [
+        {
+          "keyword": "selected_month",
+          "displayName": "Month",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "{{DEFAULT_MONTH_LABEL}}"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "ds_daily_cost_trend",
+      "displayName": "Daily Cost Trend (filtered)",
+      "query": "WITH m AS (\n  SELECT COALESCE(try_to_date(:selected_month, 'MMM yyyy'), date_trunc('MONTH', current_date())) AS mstart\n)\nSELECT\n  usage_date,\n  billing_origin_product,\n  SUM(total_cost_usd) AS daily_cost,\n  SUM(total_dbus) AS daily_dbus\nFROM {{CATALOG_SCHEMA}}.daily_cost_summary, m\nWHERE usage_date >= m.mstart AND usage_date < add_months(m.mstart, 1)\nGROUP BY usage_date, billing_origin_product\nORDER BY usage_date",
+      "parameters": [
+        {
+          "keyword": "selected_month",
+          "displayName": "Month",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "{{DEFAULT_MONTH_LABEL}}"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "ds_top_skus",
+      "displayName": "Top SKUs (filtered)",
+      "query": "WITH m AS (\n  SELECT COALESCE(try_to_date(:selected_month, 'MMM yyyy'), date_trunc('MONTH', current_date())) AS mstart\n)\nSELECT\n  sku_name,\n  billing_origin_product,\n  SUM(total_cost_usd) AS total_cost,\n  SUM(total_dbus) AS total_dbus\nFROM {{CATALOG_SCHEMA}}.daily_cost_summary, m\nWHERE usage_date >= m.mstart AND usage_date < add_months(m.mstart, 1)\nGROUP BY sku_name, billing_origin_product\nORDER BY total_cost DESC\nLIMIT 20",
+      "parameters": [
+        {
+          "keyword": "selected_month",
+          "displayName": "Month",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "{{DEFAULT_MONTH_LABEL}}"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "ds_sku_details",
+      "displayName": "SKU Daily Details (filtered)",
+      "query": "WITH m AS (\n  SELECT COALESCE(try_to_date(:selected_month, 'MMM yyyy'), date_trunc('MONTH', current_date())) AS mstart\n)\nSELECT\n  usage_date,\n  sku_name,\n  billing_origin_product,\n  product_category,\n  is_serverless,\n  total_dbus,\n  total_cost_usd,\n  cost_7d_avg,\n  cost_30d_avg,\n  cost_pct_change_7d\nFROM {{CATALOG_SCHEMA}}.sku_daily_details, m\nWHERE usage_date >= m.mstart AND usage_date < add_months(m.mstart, 1)\nORDER BY usage_date DESC, total_cost_usd DESC",
+      "parameters": [
+        {
+          "keyword": "selected_month",
+          "displayName": "Month",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "{{DEFAULT_MONTH_LABEL}}"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "ds_vm_estimates",
+      "displayName": "VM Cost per Cluster (filtered)",
+      "query": "WITH m AS (\n  SELECT COALESCE(try_to_date(:selected_month, 'MMM yyyy'), date_trunc('MONTH', current_date())) AS mstart\n)\nSELECT\n  usage_date,\n  cluster_id,\n  cluster_name,\n  sku_name,\n  driver_node_type,\n  worker_node_type,\n  num_workers,\n  ROUND(cluster_uptime_hours, 2) AS cluster_uptime_hours,\n  ROUND(dbu_cost_usd, 2) AS dbu_cost_usd,\n  ROUND(estimated_vm_cost_usd, 2) AS estimated_vm_cost_usd,\n  ROUND(total_estimated_cost, 2) AS total_estimated_cost,\n  driver_vm_type,\n  worker_vm_type\nFROM {{CATALOG_SCHEMA}}.daily_cost_with_vm_estimate, m\nWHERE usage_date >= m.mstart AND usage_date < add_months(m.mstart, 1)\nORDER BY usage_date DESC, total_estimated_cost DESC",
+      "parameters": [
+        {
+          "keyword": "selected_month",
+          "displayName": "Month",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "{{DEFAULT_MONTH_LABEL}}"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "ds_vm_cost_counters",
+      "displayName": "VM Cost Counters (month)",
+      "query": "WITH m AS (\n  SELECT COALESCE(try_to_date(:selected_month, 'MMM yyyy'), date_trunc('MONTH', current_date())) AS mstart\n),\nbounds AS (\n  SELECT mstart, add_months(mstart, 1) AS mend FROM m\n),\ncur AS (\n  SELECT d.usage_date, d.estimated_vm_cost_usd, d.dbu_cost_usd, d.total_estimated_cost\n  FROM {{CATALOG_SCHEMA}}.daily_cost_with_vm_estimate d, bounds b\n  WHERE d.usage_date >= b.mstart AND d.usage_date < b.mend\n)\nSELECT\n  ROUND(SUM(estimated_vm_cost_usd), 2) AS month_vm_cost,\n  ROUND(SUM(dbu_cost_usd), 2) AS month_dbu_cost,\n  ROUND(SUM(total_estimated_cost), 2) AS month_total_cost,\n  ROUND(SUM(estimated_vm_cost_usd) / NULLIF(COUNT(DISTINCT usage_date), 0), 2) AS avg_daily_vm_cost\nFROM cur",
+      "parameters": [
+        {
+          "keyword": "selected_month",
+          "displayName": "Month",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "{{DEFAULT_MONTH_LABEL}}"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "ds_vm_daily_trend",
+      "displayName": "VM vs DBU Daily Trend (filtered)",
+      "query": "WITH m AS (\n  SELECT COALESCE(try_to_date(:selected_month, 'MMM yyyy'), date_trunc('MONTH', current_date())) AS mstart\n)\nSELECT\n  usage_date,\n  ROUND(SUM(dbu_cost_usd), 2)          AS dbu_cost,\n  ROUND(SUM(estimated_vm_cost_usd), 2) AS vm_cost,\n  ROUND(SUM(total_estimated_cost), 2)  AS total_cost\nFROM {{CATALOG_SCHEMA}}.daily_cost_with_vm_estimate, m\nWHERE usage_date >= m.mstart AND usage_date < add_months(m.mstart, 1)\nGROUP BY usage_date\nORDER BY usage_date",
+      "parameters": [
+        {
+          "keyword": "selected_month",
+          "displayName": "Month",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "{{DEFAULT_MONTH_LABEL}}"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "ds_vm_by_node_type",
+      "displayName": "VM Cost by Node Type (filtered)",
+      "query": "WITH m AS (\n  SELECT COALESCE(try_to_date(:selected_month, 'MMM yyyy'), date_trunc('MONTH', current_date())) AS mstart\n),\nexploded AS (\n  SELECT worker_node_type AS node_type, estimated_vm_cost_usd\n  FROM {{CATALOG_SCHEMA}}.daily_cost_with_vm_estimate, m\n  WHERE usage_date >= m.mstart AND usage_date < add_months(m.mstart, 1) AND worker_node_type IS NOT NULL\n  UNION ALL\n  SELECT driver_node_type AS node_type, estimated_vm_cost_usd\n  FROM {{CATALOG_SCHEMA}}.daily_cost_with_vm_estimate, m\n  WHERE usage_date >= m.mstart AND usage_date < add_months(m.mstart, 1) AND driver_node_type IS NOT NULL\n)\nSELECT\n  node_type,\n  ROUND(SUM(estimated_vm_cost_usd), 2) AS total_vm_cost\nFROM exploded\nGROUP BY node_type\nORDER BY total_vm_cost DESC\nLIMIT 20",
+      "parameters": [
+        {
+          "keyword": "selected_month",
+          "displayName": "Month",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "{{DEFAULT_MONTH_LABEL}}"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "ds_vm_reference_prices",
+      "displayName": "GCP VM Reference Prices",
+      "query": "SELECT\n  node_type_id,\n  gcp_machine_type,\n  vcpus,\n  memory_gb,\n  ROUND(hourly_price_usd, 6) AS hourly_price_usd,\n  region,\n  price_source,\n  date_format(from_utc_timestamp(last_updated, 'Asia/Kolkata'), 'yyyy-MM-dd HH:mm:ss') AS last_updated_ist\nFROM {{CATALOG_SCHEMA}}.gcp_vm_reference_prices\nORDER BY hourly_price_usd DESC"
+    },
+    {
+      "name": "ds_alert_config",
+      "displayName": "Alert Configuration",
+      "query": "SELECT\n  config_id,\n  daily_threshold_dollars,\n  recipient_emails,\n  is_active,\n  threshold_percentages,\n  date_format(from_utc_timestamp(updated_at, 'Asia/Kolkata'), 'yyyy-MM-dd HH:mm:ss') AS updated_at_ist\nFROM {{CATALOG_SCHEMA}}.alert_config"
+    },
+    {
+      "name": "ds_alert_history",
+      "displayName": "Alert History (IST)",
+      "query": "WITH m AS (\n  SELECT COALESCE(try_to_date(:selected_month, 'MMM yyyy'), date_trunc('MONTH', current_date())) AS mstart\n)\nSELECT\n  alert_date,\n  threshold_pct,\n  ROUND(amount_at_alert, 2) AS amount_at_alert,\n  ROUND(threshold_amount, 2) AS threshold_amount,\n  ROUND(daily_threshold, 2) AS daily_threshold,\n  recipients,\n  date_format(from_utc_timestamp(sent_at, 'Asia/Kolkata'), 'yyyy-MM-dd HH:mm:ss') AS sent_at_ist,\n  status\nFROM {{CATALOG_SCHEMA}}.alert_history, m\nWHERE alert_date >= m.mstart AND alert_date < add_months(m.mstart, 1)\nORDER BY sent_at DESC\nLIMIT 100",
+      "parameters": [
+        {
+          "keyword": "selected_month",
+          "displayName": "Month",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "{{DEFAULT_MONTH_LABEL}}"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "ds_today_gauge",
+      "displayName": "Today vs Threshold (real-time)",
+      "query": "WITH m AS (\n  SELECT COALESCE(try_to_date(:selected_month, 'MMM yyyy'), date_trunc('MONTH', current_date())) AS mstart\n),\nb AS (SELECT mstart, add_months(mstart, 1) AS mend FROM m),\nspend AS (\n  SELECT\n    COALESCE(SUM(dcs.total_cost_usd), 0) AS month_spend,\n    COUNT(DISTINCT dcs.usage_date) AS days_in_month\n  FROM {{CATALOG_SCHEMA}}.daily_cost_summary dcs, b\n  WHERE dcs.usage_date >= b.mstart AND dcs.usage_date < b.mend\n),\ncfg AS (\n  SELECT daily_threshold_dollars AS threshold\n  FROM {{CATALOG_SCHEMA}}.alert_config WHERE is_active = true LIMIT 1\n)\nSELECT\n  ROUND(spend.month_spend, 2) AS month_spend,\n  ROUND(cfg.threshold, 2) AS daily_threshold,\n  ROUND((spend.month_spend / NULLIF(spend.days_in_month, 0)) / NULLIF(cfg.threshold, 0) * 100, 1) AS pct_avg_vs_threshold\nFROM spend, cfg",
+      "parameters": [
+        {
+          "keyword": "selected_month",
+          "displayName": "Month",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "{{DEFAULT_MONTH_LABEL}}"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "page_cost_overview",
+      "displayName": "Cost Overview",
+      "layout": [
+        {
+          "widget": {
+            "name": "w_title_overview",
+            "textbox_spec": "# GCP Cost Observability\nPick a month from the filter on the right \u2014 all metrics, charts, and tables on **Cost Overview**, **SKU Deep Dive**, and **GCP VM Costs** re-compute for the selected month. Defaults to the current month. Schedules and displayed timestamps are in **IST (Asia/Kolkata)**."
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 24,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "w_filter_month",
+            "queries": [
+              {
+                "name": "picker",
+                "query": {
+                  "datasetName": "ds_month_picker",
+                  "fields": [
+                    {
+                      "name": "month_label",
+                      "expression": "`month_label`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              },
+              {
+                "name": "f_counters",
+                "query": {
+                  "datasetName": "ds_cost_counters",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_trend",
+                "query": {
+                  "datasetName": "ds_daily_cost_trend",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_top_skus",
+                "query": {
+                  "datasetName": "ds_top_skus",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_sku_details",
+                "query": {
+                  "datasetName": "ds_sku_details",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_vm_counters",
+                "query": {
+                  "datasetName": "ds_vm_cost_counters",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_vm_trend",
+                "query": {
+                  "datasetName": "ds_vm_daily_trend",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_vm_node",
+                "query": {
+                  "datasetName": "ds_vm_by_node_type",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_vm_est",
+                "query": {
+                  "datasetName": "ds_vm_estimates",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_today_gauge",
+                "query": {
+                  "datasetName": "ds_today_gauge",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_alert_history",
+                "query": {
+                  "datasetName": "ds_alert_history",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-single-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "month_label",
+                    "queryName": "picker",
+                    "displayName": "Month"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_counters"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_trend"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_top_skus"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_sku_details"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_vm_counters"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_vm_trend"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_vm_node"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_vm_est"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_today_gauge"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_alert_history"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Month (defaults to current)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 24,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "w_month_total",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_cost_counters",
+                  "fields": [
+                    {
+                      "name": "month_total",
+                      "expression": "`month_total`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "month_total",
+                  "displayName": "Month Total ($)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Month Total (DBU)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 4,
+            "width": 7,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "w_avg_daily",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_cost_counters",
+                  "fields": [
+                    {
+                      "name": "avg_daily",
+                      "expression": "`avg_daily`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "avg_daily",
+                  "displayName": "Avg Daily ($)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Avg Daily"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
+            "width": 7,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "w_peak_day",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_cost_counters",
+                  "fields": [
+                    {
+                      "name": "peak_day",
+                      "expression": "`peak_day`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "peak_day",
+                  "displayName": "Peak Day ($)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Peak Day"
+              }
+            }
+          },
+          "position": {
+            "x": 7,
+            "y": 4,
+            "width": 17,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "w_vs_prev",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_cost_counters",
+                  "fields": [
+                    {
+                      "name": "pct_vs_prev_month",
+                      "expression": "`pct_vs_prev_month`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "pct_vs_prev_month",
+                  "displayName": "vs Prev Month (%)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "vs Previous Month"
+              }
+            }
+          },
+          "position": {
+            "x": 7,
+            "y": 8,
+            "width": 17,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "w_daily_cost_trend",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_daily_cost_trend",
+                  "fields": [
+                    {
+                      "name": "usage_date",
+                      "expression": "`usage_date`"
+                    },
+                    {
+                      "name": "daily_cost",
+                      "expression": "`daily_cost`"
+                    },
+                    {
+                      "name": "billing_origin_product",
+                      "expression": "`billing_origin_product`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "area",
+              "encodings": {
+                "x": {
+                  "fieldName": "usage_date",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "Date"
+                },
+                "y": {
+                  "fieldName": "daily_cost",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Daily Cost ($)"
+                },
+                "color": {
+                  "fieldName": "billing_origin_product",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Product"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Daily DBU Cost by Product"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 12,
+            "width": 24,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "w_top_skus",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_top_skus",
+                  "fields": [
+                    {
+                      "name": "sku_name",
+                      "expression": "`sku_name`"
+                    },
+                    {
+                      "name": "total_cost",
+                      "expression": "`total_cost`"
+                    },
+                    {
+                      "name": "billing_origin_product",
+                      "expression": "`billing_origin_product`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "total_cost",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Total Cost ($)"
+                },
+                "y": {
+                  "fieldName": "sku_name",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "SKU"
+                },
+                "color": {
+                  "fieldName": "billing_origin_product",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Product"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Top SKUs by Cost"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 20,
+            "width": 24,
+            "height": 8
+          }
+        }
+      ]
+    },
+    {
+      "name": "page_sku_deep_dive",
+      "displayName": "SKU Deep Dive",
+      "layout": [
+        {
+          "widget": {
+            "name": "w_filter_month_sku",
+            "queries": [
+              {
+                "name": "picker_sku",
+                "query": {
+                  "datasetName": "ds_month_picker",
+                  "fields": [
+                    {
+                      "name": "month_label",
+                      "expression": "`month_label`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              },
+              {
+                "name": "f_counters_sku",
+                "query": {
+                  "datasetName": "ds_cost_counters",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_trend_sku",
+                "query": {
+                  "datasetName": "ds_daily_cost_trend",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_top_skus_sku",
+                "query": {
+                  "datasetName": "ds_top_skus",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_sku_details_sku",
+                "query": {
+                  "datasetName": "ds_sku_details",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_vm_counters_sku",
+                "query": {
+                  "datasetName": "ds_vm_cost_counters",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_vm_trend_sku",
+                "query": {
+                  "datasetName": "ds_vm_daily_trend",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_vm_node_sku",
+                "query": {
+                  "datasetName": "ds_vm_by_node_type",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_vm_est_sku",
+                "query": {
+                  "datasetName": "ds_vm_estimates",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_today_gauge_sku",
+                "query": {
+                  "datasetName": "ds_today_gauge",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_alert_history_sku",
+                "query": {
+                  "datasetName": "ds_alert_history",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-single-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "month_label",
+                    "queryName": "picker_sku",
+                    "displayName": "Month"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_counters_sku"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_trend_sku"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_top_skus_sku"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_sku_details_sku"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_vm_counters_sku"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_vm_trend_sku"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_vm_node_sku"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_vm_est_sku"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_today_gauge_sku"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_alert_history_sku"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Month (defaults to current)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 24,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "w_title_sku",
+            "textbox_spec": "# SKU Deep Dive\nPer-SKU daily costs for the month selected on the **Cost Overview** page. Use the SKU / Category filters below to narrow further."
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 24,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "w_filter_sku",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_sku_details",
+                  "fields": [
+                    {
+                      "name": "sku_name",
+                      "expression": "`sku_name`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "sku_name",
+                    "queryName": "main_query",
+                    "displayName": "SKU Name"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Filter: SKU Name"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 4,
+            "width": 24,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "w_filter_category",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_sku_details",
+                  "fields": [
+                    {
+                      "name": "product_category",
+                      "expression": "`product_category`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "product_category",
+                    "queryName": "main_query",
+                    "displayName": "Product Category"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Filter: Product Category"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 6,
+            "width": 24,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "w_sku_daily_cost",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_sku_details",
+                  "fields": [
+                    {
+                      "name": "usage_date",
+                      "expression": "`usage_date`"
+                    },
+                    {
+                      "name": "total_cost_usd",
+                      "expression": "`total_cost_usd`"
+                    },
+                    {
+                      "name": "sku_name",
+                      "expression": "`sku_name`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "usage_date",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "Date"
+                },
+                "y": {
+                  "fieldName": "total_cost_usd",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Cost ($)"
+                },
+                "color": {
+                  "fieldName": "sku_name",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "SKU"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Daily Cost by SKU"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
+            "width": 24,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "w_7d_change",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_sku_details",
+                  "fields": [
+                    {
+                      "name": "sku_name",
+                      "expression": "`sku_name`"
+                    },
+                    {
+                      "name": "cost_pct_change_7d",
+                      "expression": "`cost_pct_change_7d`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "cost_pct_change_7d",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "7-Day Change (%)"
+                },
+                "y": {
+                  "fieldName": "sku_name",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "SKU"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "7-Day Cost Change (%)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 16,
+            "width": 24,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "w_sku_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_sku_details",
+                  "fields": [
+                    {
+                      "name": "usage_date",
+                      "expression": "`usage_date`"
+                    },
+                    {
+                      "name": "sku_name",
+                      "expression": "`sku_name`"
+                    },
+                    {
+                      "name": "product_category",
+                      "expression": "`product_category`"
+                    },
+                    {
+                      "name": "is_serverless",
+                      "expression": "`is_serverless`"
+                    },
+                    {
+                      "name": "total_dbus",
+                      "expression": "`total_dbus`"
+                    },
+                    {
+                      "name": "total_cost_usd",
+                      "expression": "`total_cost_usd`"
+                    },
+                    {
+                      "name": "cost_7d_avg",
+                      "expression": "`cost_7d_avg`"
+                    },
+                    {
+                      "name": "cost_30d_avg",
+                      "expression": "`cost_30d_avg`"
+                    },
+                    {
+                      "name": "cost_pct_change_7d",
+                      "expression": "`cost_pct_change_7d`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "usage_date",
+                    "displayName": "Date",
+                    "type": "date",
+                    "order": 1
+                  },
+                  {
+                    "fieldName": "sku_name",
+                    "displayName": "SKU",
+                    "type": "string",
+                    "order": 2
+                  },
+                  {
+                    "fieldName": "product_category",
+                    "displayName": "Category",
+                    "type": "string",
+                    "order": 3
+                  },
+                  {
+                    "fieldName": "is_serverless",
+                    "displayName": "Serverless",
+                    "type": "boolean",
+                    "order": 4
+                  },
+                  {
+                    "fieldName": "total_dbus",
+                    "displayName": "DBUs",
+                    "type": "number",
+                    "order": 5
+                  },
+                  {
+                    "fieldName": "total_cost_usd",
+                    "displayName": "Cost ($)",
+                    "type": "number",
+                    "order": 6
+                  },
+                  {
+                    "fieldName": "cost_7d_avg",
+                    "displayName": "7d Avg ($)",
+                    "type": "number",
+                    "order": 7
+                  },
+                  {
+                    "fieldName": "cost_30d_avg",
+                    "displayName": "30d Avg ($)",
+                    "type": "number",
+                    "order": 8
+                  },
+                  {
+                    "fieldName": "cost_pct_change_7d",
+                    "displayName": "7d Change (%)",
+                    "type": "number",
+                    "order": 9
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "SKU Cost Details (selected month)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 24,
+            "width": 24,
+            "height": 8
+          }
+        }
+      ]
+    },
+    {
+      "name": "page_gcp_vm_costs",
+      "displayName": "GCP VM Costs",
+      "layout": [
+        {
+          "widget": {
+            "name": "w_filter_month_vm",
+            "queries": [
+              {
+                "name": "picker_vm",
+                "query": {
+                  "datasetName": "ds_month_picker",
+                  "fields": [
+                    {
+                      "name": "month_label",
+                      "expression": "`month_label`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              },
+              {
+                "name": "f_counters_vm",
+                "query": {
+                  "datasetName": "ds_cost_counters",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_trend_vm",
+                "query": {
+                  "datasetName": "ds_daily_cost_trend",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_top_skus_vm",
+                "query": {
+                  "datasetName": "ds_top_skus",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_sku_details_vm",
+                "query": {
+                  "datasetName": "ds_sku_details",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_vm_counters_vm",
+                "query": {
+                  "datasetName": "ds_vm_cost_counters",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_vm_trend_vm",
+                "query": {
+                  "datasetName": "ds_vm_daily_trend",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_vm_node_vm",
+                "query": {
+                  "datasetName": "ds_vm_by_node_type",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_vm_est_vm",
+                "query": {
+                  "datasetName": "ds_vm_estimates",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_today_gauge_vm",
+                "query": {
+                  "datasetName": "ds_today_gauge",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_alert_history_vm",
+                "query": {
+                  "datasetName": "ds_alert_history",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-single-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "month_label",
+                    "queryName": "picker_vm",
+                    "displayName": "Month"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_counters_vm"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_trend_vm"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_top_skus_vm"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_sku_details_vm"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_vm_counters_vm"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_vm_trend_vm"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_vm_node_vm"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_vm_est_vm"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_today_gauge_vm"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_alert_history_vm"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Month (defaults to current)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 3,
+            "width": 24,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "w_title_vm",
+            "textbox_spec": "# GCP VM Costs\nEstimated GCP Compute Engine infrastructure cost for Databricks clusters, filtered to the selected month. Prices come from `gcp_vm_reference_prices`, refreshed **daily** by the `refresh_vm_prices` task using either the GCP Cloud Billing Catalog API (if `gcp_billing_api_key_secret_*` set in `config.yml`) or the region-aware seed list. All timestamps are IST.\n\n> List prices do not include CUDs, SUDs, or spot/preemptible pricing."
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 24,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "w_vm_month",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_vm_cost_counters",
+                  "fields": [
+                    {
+                      "name": "month_vm_cost",
+                      "expression": "`month_vm_cost`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "month_vm_cost",
+                  "displayName": "VM Cost (month)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "VM Cost (Month)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 9,
+            "width": 7,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "w_dbu_month",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_vm_cost_counters",
+                  "fields": [
+                    {
+                      "name": "month_dbu_cost",
+                      "expression": "`month_dbu_cost`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "month_dbu_cost",
+                  "displayName": "Cluster DBU Cost $ (month)",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Cluster DBU Cost $ (Month)"
+              }
+            }
+          },
+          "position": {
+            "x": 7,
+            "y": 9,
+            "width": 17,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "w_total_month",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_vm_cost_counters",
+                  "fields": [
+                    {
+                      "name": "month_total_cost",
+                      "expression": "`month_total_cost`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "month_total_cost",
+                  "displayName": "Cluster TCO (month)",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Cluster TCO (Month)"
+              }
+            }
+          },
+          "position": {
+            "x": 7,
+            "y": 5,
+            "width": 17,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "w_avg_vm",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_vm_cost_counters",
+                  "fields": [
+                    {
+                      "name": "avg_daily_vm_cost",
+                      "expression": "`avg_daily_vm_cost`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "avg_daily_vm_cost",
+                  "displayName": "Avg Daily VM ($)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Avg Daily VM Cost"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 7,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "w_vm_daily_trend",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_vm_daily_trend",
+                  "fields": [
+                    {
+                      "name": "usage_date",
+                      "expression": "`usage_date`"
+                    },
+                    {
+                      "name": "dbu_cost",
+                      "expression": "`dbu_cost`"
+                    },
+                    {
+                      "name": "vm_cost",
+                      "expression": "`vm_cost`"
+                    },
+                    {
+                      "name": "total_cost",
+                      "expression": "`total_cost`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "usage_date",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "Date"
+                },
+                "y": [
+                  {
+                    "fieldName": "dbu_cost",
+                    "scale": {
+                      "type": "quantitative"
+                    },
+                    "displayName": "DBU Cost ($)"
+                  },
+                  {
+                    "fieldName": "vm_cost",
+                    "scale": {
+                      "type": "quantitative"
+                    },
+                    "displayName": "VM Cost ($)"
+                  },
+                  {
+                    "fieldName": "total_cost",
+                    "scale": {
+                      "type": "quantitative"
+                    },
+                    "displayName": "Total ($)"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "DBU vs VM Cost \u2014 Daily Trend (month)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 13,
+            "width": 24,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "w_vm_by_node_type",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_vm_by_node_type",
+                  "fields": [
+                    {
+                      "name": "node_type",
+                      "expression": "`node_type`"
+                    },
+                    {
+                      "name": "total_vm_cost",
+                      "expression": "`total_vm_cost`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "total_vm_cost",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "VM Cost ($)"
+                },
+                "y": {
+                  "fieldName": "node_type",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Node Type"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "VM Cost by Node Type (month)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 21,
+            "width": 24,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "w_vm_price_ref_title",
+            "textbox_spec": "## GCP VM Reference Prices\n`last_updated` reflects the latest daily refresh (IST). Source marked `GCP list price` comes from the static seed (us-central1 list prices, optionally adjusted for region); rows marked `Estimated` use GCP N1 component pricing. If the live GCP Cloud Billing Catalog API is configured, rows are marked `GCP Cloud Billing Catalog API (<region>)`."
+          },
+          "position": {
+            "x": 0,
+            "y": 29,
+            "width": 24,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "w_vm_price_ref_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_vm_reference_prices",
+                  "fields": [
+                    {
+                      "name": "node_type_id",
+                      "expression": "`node_type_id`"
+                    },
+                    {
+                      "name": "gcp_machine_type",
+                      "expression": "`gcp_machine_type`"
+                    },
+                    {
+                      "name": "vcpus",
+                      "expression": "`vcpus`"
+                    },
+                    {
+                      "name": "memory_gb",
+                      "expression": "`memory_gb`"
+                    },
+                    {
+                      "name": "hourly_price_usd",
+                      "expression": "`hourly_price_usd`"
+                    },
+                    {
+                      "name": "region",
+                      "expression": "`region`"
+                    },
+                    {
+                      "name": "price_source",
+                      "expression": "`price_source`"
+                    },
+                    {
+                      "name": "last_updated_ist",
+                      "expression": "`last_updated_ist`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "node_type_id",
+                    "displayName": "Node Type",
+                    "type": "string",
+                    "order": 1
+                  },
+                  {
+                    "fieldName": "gcp_machine_type",
+                    "displayName": "GCP Machine",
+                    "type": "string",
+                    "order": 2
+                  },
+                  {
+                    "fieldName": "vcpus",
+                    "displayName": "vCPUs",
+                    "type": "number",
+                    "order": 3
+                  },
+                  {
+                    "fieldName": "memory_gb",
+                    "displayName": "Memory (GB)",
+                    "type": "number",
+                    "order": 4
+                  },
+                  {
+                    "fieldName": "hourly_price_usd",
+                    "displayName": "$/hr",
+                    "type": "number",
+                    "order": 5
+                  },
+                  {
+                    "fieldName": "region",
+                    "displayName": "Region",
+                    "type": "string",
+                    "order": 6
+                  },
+                  {
+                    "fieldName": "price_source",
+                    "displayName": "Source",
+                    "type": "string",
+                    "order": 7
+                  },
+                  {
+                    "fieldName": "last_updated_ist",
+                    "displayName": "Last Updated (IST)",
+                    "type": "string",
+                    "order": 8
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Reference Prices"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 31,
+            "width": 24,
+            "height": 8
+          }
+        }
+      ]
+    },
+    {
+      "name": "page_alerts",
+      "displayName": "Alerts & Config",
+      "layout": [
+        {
+          "widget": {
+            "name": "w_filter_month_alerts",
+            "queries": [
+              {
+                "name": "picker_alerts",
+                "query": {
+                  "datasetName": "ds_month_picker",
+                  "fields": [
+                    {
+                      "name": "month_label",
+                      "expression": "`month_label`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              },
+              {
+                "name": "f_counters_alerts",
+                "query": {
+                  "datasetName": "ds_cost_counters",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_trend_alerts",
+                "query": {
+                  "datasetName": "ds_daily_cost_trend",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_top_skus_alerts",
+                "query": {
+                  "datasetName": "ds_top_skus",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_sku_details_alerts",
+                "query": {
+                  "datasetName": "ds_sku_details",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_vm_counters_alerts",
+                "query": {
+                  "datasetName": "ds_vm_cost_counters",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_vm_trend_alerts",
+                "query": {
+                  "datasetName": "ds_vm_daily_trend",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_vm_node_alerts",
+                "query": {
+                  "datasetName": "ds_vm_by_node_type",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_vm_est_alerts",
+                "query": {
+                  "datasetName": "ds_vm_estimates",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_today_gauge_alerts",
+                "query": {
+                  "datasetName": "ds_today_gauge",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_alert_history_alerts",
+                "query": {
+                  "datasetName": "ds_alert_history",
+                  "parameters": [
+                    {
+                      "name": "selected_month",
+                      "keyword": "selected_month"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-single-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "month_label",
+                    "queryName": "picker_alerts",
+                    "displayName": "Month"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_counters_alerts"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_trend_alerts"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_top_skus_alerts"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_sku_details_alerts"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_vm_counters_alerts"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_vm_trend_alerts"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_vm_node_alerts"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_vm_est_alerts"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_today_gauge_alerts"
+                  },
+                  {
+                    "parameterName": "selected_month",
+                    "queryName": "f_alert_history_alerts"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Month (defaults to current)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 12,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "w_title_alerts",
+            "textbox_spec": "# Alerts & Configuration\nDaily cost-threshold monitoring. The three counters below reflect **today (UTC billing day)** \u2014 they don't respond to the month filter. All timestamps shown in IST."
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "w_pct_consumed",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_today_gauge",
+                  "fields": [
+                    {
+                      "name": "pct_avg_vs_threshold",
+                      "expression": "`pct_avg_vs_threshold`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "pct_avg_vs_threshold",
+                  "displayName": "Avg Daily / Threshold (%)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Avg Daily vs Threshold (%)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 4,
+            "width": 4,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "w_today_spend_alert",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_today_gauge",
+                  "fields": [
+                    {
+                      "name": "month_spend",
+                      "expression": "`month_spend`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "month_spend",
+                  "displayName": "Month Spend ($)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Month Spend"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 4,
+            "width": 4,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "w_threshold",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_today_gauge",
+                  "fields": [
+                    {
+                      "name": "daily_threshold",
+                      "expression": "`daily_threshold`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "daily_threshold",
+                  "displayName": "Daily Threshold ($)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Daily Threshold $"
+              }
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 4,
+            "width": 4,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "w_config_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_alert_config",
+                  "fields": [
+                    {
+                      "name": "config_id",
+                      "expression": "`config_id`"
+                    },
+                    {
+                      "name": "daily_threshold_dollars",
+                      "expression": "`daily_threshold_dollars`"
+                    },
+                    {
+                      "name": "recipient_emails",
+                      "expression": "`recipient_emails`"
+                    },
+                    {
+                      "name": "is_active",
+                      "expression": "`is_active`"
+                    },
+                    {
+                      "name": "threshold_percentages",
+                      "expression": "`threshold_percentages`"
+                    },
+                    {
+                      "name": "updated_at_ist",
+                      "expression": "`updated_at_ist`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "config_id",
+                    "displayName": "ID",
+                    "type": "number",
+                    "order": 1
+                  },
+                  {
+                    "fieldName": "daily_threshold_dollars",
+                    "displayName": "Threshold ($)",
+                    "type": "number",
+                    "order": 2
+                  },
+                  {
+                    "fieldName": "recipient_emails",
+                    "displayName": "Recipients",
+                    "type": "string",
+                    "order": 3
+                  },
+                  {
+                    "fieldName": "is_active",
+                    "displayName": "Active",
+                    "type": "boolean",
+                    "order": 4
+                  },
+                  {
+                    "fieldName": "threshold_percentages",
+                    "displayName": "Alert Tiers (%)",
+                    "type": "string",
+                    "order": 5
+                  },
+                  {
+                    "fieldName": "updated_at_ist",
+                    "displayName": "Last Updated (IST)",
+                    "type": "string",
+                    "order": 6
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Alert Configuration (editable via SQL UPDATE)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
+            "width": 12,
+            "height": 5
+          }
+        },
+        {
+          "widget": {
+            "name": "w_alert_history",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_alert_history",
+                  "fields": [
+                    {
+                      "name": "alert_date",
+                      "expression": "`alert_date`"
+                    },
+                    {
+                      "name": "threshold_pct",
+                      "expression": "`threshold_pct`"
+                    },
+                    {
+                      "name": "amount_at_alert",
+                      "expression": "`amount_at_alert`"
+                    },
+                    {
+                      "name": "threshold_amount",
+                      "expression": "`threshold_amount`"
+                    },
+                    {
+                      "name": "daily_threshold",
+                      "expression": "`daily_threshold`"
+                    },
+                    {
+                      "name": "recipients",
+                      "expression": "`recipients`"
+                    },
+                    {
+                      "name": "sent_at_ist",
+                      "expression": "`sent_at_ist`"
+                    },
+                    {
+                      "name": "status",
+                      "expression": "`status`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "alert_date",
+                    "displayName": "Date",
+                    "type": "date",
+                    "order": 1
+                  },
+                  {
+                    "fieldName": "threshold_pct",
+                    "displayName": "Tier (%)",
+                    "type": "number",
+                    "order": 2
+                  },
+                  {
+                    "fieldName": "amount_at_alert",
+                    "displayName": "Cost at Alert ($)",
+                    "type": "number",
+                    "order": 3
+                  },
+                  {
+                    "fieldName": "threshold_amount",
+                    "displayName": "Tier Amount ($)",
+                    "type": "number",
+                    "order": 4
+                  },
+                  {
+                    "fieldName": "daily_threshold",
+                    "displayName": "Threshold ($)",
+                    "type": "number",
+                    "order": 5
+                  },
+                  {
+                    "fieldName": "recipients",
+                    "displayName": "Recipients",
+                    "type": "string",
+                    "order": 6
+                  },
+                  {
+                    "fieldName": "sent_at_ist",
+                    "displayName": "Sent At (IST)",
+                    "type": "string",
+                    "order": 7
+                  },
+                  {
+                    "fieldName": "status",
+                    "displayName": "Status",
+                    "type": "string",
+                    "order": 8
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Alert History (IST)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 13,
+            "width": 12,
+            "height": 10
+          }
+        }
+      ]
+    }
+  ]
+}

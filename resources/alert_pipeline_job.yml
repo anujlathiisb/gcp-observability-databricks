@@ -1,0 +1,56 @@
+resources:
+  jobs:
+    alert_pipeline:
+      name: "[${bundle.target}] GCP Cost Observability - Hourly Alert Checker"
+      description: "Hourly threshold check against daily Databricks cost; sends email alerts at configured percentages"
+      schedule:
+        quartz_cron_expression: ${var.alert_schedule_cron}
+        timezone_id: ${var.schedule_timezone}
+      tags:
+        project: "gcp-cost-observability"
+        pipeline: "alert-checker"
+
+      tasks:
+        - task_key: check_alerts
+          description: "Check daily cost thresholds and log alert_history rows"
+          notebook_task:
+            notebook_path: ../src/05_alert_checker.py
+            source: WORKSPACE
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              notification_destination_id: ${var.notification_destination_id}
+          environment_key: default_env
+
+        - task_key: gate_alerts_fired
+          description: "Only continue to the email task when new alerts were logged"
+          depends_on:
+            - task_key: check_alerts
+          condition_task:
+            op: GREATER_THAN
+            left: "{{tasks.check_alerts.values.alerts_sent}}"
+            right: "0"
+
+        - task_key: send_alert_email
+          description: "Trigger the task-level email_notifications. Recipients are set via alert_emails_list var."
+          depends_on:
+            - task_key: gate_alerts_fired
+              outcome: "true"
+          notebook_task:
+            notebook_path: ../src/06_send_alert_email.py
+            source: WORKSPACE
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+          email_notifications:
+            on_success: ${var.alert_emails_list}
+            no_alert_for_skipped_runs: true
+          environment_key: default_env
+
+      environments:
+        - environment_key: default_env
+          spec:
+            client: "2"
+            dependencies:
+              - databricks-sdk>=0.40.0
+              - requests>=2.31.0
