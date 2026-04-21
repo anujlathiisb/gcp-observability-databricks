@@ -163,12 +163,40 @@ Click **Publish** once so other viewers can open it.
 
 ## 5. Change configuration later
 
-### Threshold / recipients / tiers / region / schedules
-Edit `config.yml` and redeploy:
+### Option A — edit `config.yml` locally and redeploy (CLI)
 ```bash
+cd <the-folder-the-installer-cloned>
+$EDITOR config.yml
 ./scripts/deploy.py --target=prod
 ```
 The setup task uses MERGE, so `alert_config` is updated from `config.yml` on every deploy. No SQL needed.
+
+### Option B — edit `config.yml` from the Databricks UI and redeploy (no local CLI)
+
+If your laptop doesn't have the CLI anymore, do everything from inside the workspace.
+
+**One-time setup — clone the repo as a Databricks Git Folder:**
+1. Workspace → **Repos** → **Add repo**
+2. URL: `https://github.com/anujlathiisb/gcp-observability-databricks` · Branch: `main` → **Clone**
+3. Folder appears under `/Workspace/Users/<you>/gcp-observability-databricks`
+
+**Edit the config:**
+1. Open the Git folder in Workspace → click `config.yml`
+2. Edit in the workspace editor (same panel the Notebook editor uses) — change threshold, recipients, region, schedule, whatever
+3. **Cmd+S** / **Ctrl+S** saves to `/Workspace/Users/<you>/gcp-observability-databricks/config.yml`
+4. *(Optional but recommended)* Commit + push via the workspace **Git** icon so the change persists for other environments / teammates
+
+**Redeploy from a Web Terminal:**
+1. Compute → any small cluster → **Web Terminal** tab
+2. Run:
+   ```bash
+   cd /Workspace/Users/<you>/gcp-observability-databricks
+   pip install --user pyyaml          # one-time on a fresh cluster
+   ./scripts/deploy.py --target=prod
+   ```
+3. Optional: `./scripts/deploy.py --target=prod --run-etl` to kick off an immediate ETL so the new threshold / tiers reflect on the dashboard right away
+
+That's the whole "edit + redeploy from UI" flow. Everything in `config.yml` — threshold, tiers, recipients, region, cron times, timezone, GCP secret pointers — can be changed this way.
 
 ### Quick runtime tweaks (no redeploy)
 For one-off changes between deploys:
